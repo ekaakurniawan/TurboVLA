@@ -239,3 +239,197 @@ $ cat outputs/evaluation/libero_object.json
   "overall_success_rate": 1.0
 }
 ```
+
+### Benchmark Latency
+
+Install `xpu-smi` through `intel-omix`.
+
+Need to downgrade GPU driver to version [26.35.39758.21](https://github.com/intel/compute-runtime/releases#release-26.35.39758.10)
+as the current latest `intel-omix` version 0.5.0 support the GPU version.
+
+```bash
+$ clinfo | grep "Driver Version"
+```
+```
+  Driver Version                                  26.35.39758.10
+```
+
+```bash
+$ wget -qO - https://repositories.intel.com/gpu/intel-graphics.key | \
+  sudo gpg --yes --dearmor --output /usr/share/keyrings/intel-graphics.gpg
+```
+
+```bash
+$ . /etc/os-release
+  if [[ ! " resolute noble " =~ " ${VERSION_CODENAME} " ]]; then
+    echo "Ubuntu version ${VERSION_CODENAME} not supported"
+  else
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu ${VERSION_CODENAME}/intel-omix/0.5.0 unified" | \
+    sudo tee /etc/apt/sources.list.d/intel-gpu-${VERSION_CODENAME}.list
+    sudo apt update
+  fi
+```
+
+```bash
+$ sudo apt install -y intel-omix
+```
+
+Test `xpu-smi` command.
+
+```bash
+$ xpu-smi
+```
+``` 
+[Info] Device exposes no readable subdevice, card, package or GPU power domain out of 0 enumerated; energy consumed reports N/A.
++----------------------------------------------+----------------------------+------------------------+
+|            Intel XPU-SMI v2.2    Driver: 71FE0BD92C6EC56E38AD95C    Level Zero: 1.32.0             |
++----------------------------------------------+----------------------------+------------------------+
+| GPU  Name                    Persistence-M   | Bus-Id            Disp.A   |   Volatile Uncorr. ECC |
+| Fan              Temp  Pwr:Usage/Cap         | Memory-Usage               |   GPU-Util  Compute M. |
++----------------------------------------------+----------------------------+------------------------+
+|   0  Intel(R) Arc(TM) B390   Off             | 0000:00:02.0      Off      |               Disabled |
+|      GPU                                     |                            |                        |
+| N/A               N/A  N/A                   | 22687MiB / 22620MiB        |      N/A       Default |
++----------------------------------------------+----------------------------+------------------------+
+
++-------+---------+--------+---------------------+---------------------------------------------------+
+| Processes:                                                                                         |
+|   GPU       PID    Type    Process Name                                           GPU Memory Usage |
++-------+---------+--------+---------------------+---------------------------------------------------+
+|     0      8224     C      gnome-shell                                                     866 MiB |
+|     0      9839     G      ptyxis                                                           92 MiB |
+|     0      9901     C      firefox                                                         309 MiB |
+|     0     11129     C      Xwayland                                                         85 MiB |
+|     0     11148     C      mutter-x11-frames                                                 3 MiB |
+|     0     15475     G      nautilus                                                         86 MiB |
+|     0     15568     G      gnome-text-editor                                               108 MiB |
++-------+---------+--------+---------------------+---------------------------------------------------+
+```
+
+```bash
+$ xpu-smi \
+  --query-gpu=index,uuid,name,driver_version,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,power.limit \
+  --format=csv,noheader,nounits
+```
+```
+[Info] Device exposes no Card power domain (enumerated: none); Card-domain power and energy report N/A.
+[Info] Device exposes no GPU power domain (enumerated: none); GPU-domain power and energy report N/A.
+0, 00000000-0000-0200-0000-0004b0808086, Intel(R) Arc(TM) B390 GPU, 17013582, 24113.37890625, 21289.59765625, N/A, N/A, N/A, N/A
+```
+
+```bash
+$ xpu-smi ps
+```
+```
+  PID       Command               DeviceID     SHR     MEM       
+  8224      gnome-shell           0            0       939964    
+  9839      ptyxis                0            0       94300     
+  9901      firefox               0            0       321208    
+  11129     Xwayland              0            0       86648     
+  11148     mutter-x11-frames     0            0       3188      
+  15475     nautilus              0            0       88108     
+  15568     gnome-text-editor     0            0       116828  
+```
+
+Run the latency bechmark.
+
+```bash
+$ python scripts/libero/benchmark_latency_xpu.py \
+  --checkpoint pretrained/TurboVLA/checkpoints/libero/turbovla_libero.pth \
+  --dinov3-path pretrained/dinov3-vitb16-pretrain-lvd1689m \
+  --bert-path pretrained/bert-base-uncased \
+  --device xpu:0 --cpu-threads 1 --output-dir outputs/latency
+```
+```
+/home/eka/miniconda3/envs/turbovla-libero/lib/python3.10/site-packages/timm/models/layers/__init__.py:49: FutureWarning: Importing from timm.models.layers is deprecated, please import via timm.layers
+  warnings.warn(f"Importing from {__name__} is deprecated, please import via timm.layers", FutureWarning)
+[TurboVLAPolicy] model source: turbovla.models.turbovla
+[TurboVLAPolicy] precision=bf16, dinov3_output_hidden_states=True
+[TurboVLAPolicy] strict checkpoint load: pretrained/TurboVLA/checkpoints/libero/turbovla_libero.pth (672 tensors)
+[TurboVLAPolicy] precision=bf16, model_parameter_dtype=bfloat16
+/home/eka/miniconda3/envs/turbovla-libero/lib/python3.10/site-packages/transformers/modeling_utils.py:1742: FutureWarning: The `device` argument is deprecated and will be removed in v5 of Transformers.
+  warnings.warn(
+bidirectional: median of block medians = 16.412 ms
+Saved outputs/latency/summary.json
+```
+
+GPU utilization spikes to 80%. Following is the sample output.
+
+```bash
+$ cat outputs/latency/summary.json
+```
+```
+{
+  "status": "completed",
+  ...
+  "results": [
+    {
+      "mode": "bidirectional",
+      "blocks": [
+        {
+          "block": 1,
+          "median_ms": 16.411548500400386,
+          "p90_ms": 16.587745800097764,
+          "mean_ms": 16.45152938002866,
+          "min_ms": 16.17114100008621,
+          "max_ms": 17.689412999970955,
+          "raw_ms": [
+            16.43532900015998,
+            16.480453999974998,
+            16.229353999733576,
+            16.30099700014398,
+            16.535617000045022,
+            16.45417300005647,
+            16.581406999648607,
+            16.362291000405094,
+            16.329009999935806,
+            16.398988999753783,
+            16.40170000064245,
+            16.51525400029641,
+            16.29081499959284,
+            16.3330750001478,
+            16.547155000807834,
+            16.58562000011443,
+            16.40574100019876,
+            16.606877999947756,
+            16.437573999610322,
+            16.43818199954694,
+            16.4001310004096,
+            16.404244999648654,
+            16.26319099977991,
+            16.378178000195476,
+            16.43749499999103,
+            16.457659000479907,
+            16.417356000602013,
+            16.562506999434845,
+            17.689412999970955,
+            16.835564000757586,
+            16.47712300018611,
+            16.726974999983213,
+            16.75526000053651,
+            16.38839299994288,
+            16.52335599919752,
+            16.331068999534182,
+            16.507246999935887,
+            16.17114100008621,
+            16.310889999658684,
+            16.23726399975567,
+            16.338247999556188,
+            16.288879000057932,
+            16.50706500004162,
+            16.42989199990552,
+            16.352948000530887,
+            16.283580000163056,
+            16.498166999554087,
+            16.32426500054862,
+            16.308975999891118,
+            16.300377000334265
+          ]
+        }
+      ],
+      ...
+      "median_of_block_medians_ms": 16.411548500400386
+    }
+  ]
+}
+```

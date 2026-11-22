@@ -368,7 +368,7 @@ class TurboVLAPolicy:
             self.device = torch.device(device)
         elif torch.cuda.is_available():
             self.device = torch.device("cuda")
-        elif torch.xpu.is_available():
+        elif "xpu" in dir(torch) and torch.xpu.is_available():
             self.device = torch.device("xpu")
         else:
             self.device = torch.device("cpu")
